@@ -1,0 +1,73 @@
+apiVersion: brickkit/v1
+kind: Component
+
+metadata:
+  id: mdm/customer                   # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
+  name: 客户主数据
+  version: 1.0.0                     # 精确版本，不接受 ^ / ~ / latest
+  description: 客户名称、税号、信用额度、状态、联系人、开票信息
+  license: Apache-2.0                # 平台支持这一格（manifest.Metadata.License），填上
+  vendor: brickKit                   # 同上，可选但填了对交付文档有用
+
+tags: [mdm, customer, master-data]
+
+artifacts:
+  - type: api-contract
+    format: protobuf
+    files:
+      - contracts/mdm/customer/v1/customer.proto
+      - contracts/events/customer.events.json
+  - type: api-contract
+    format: openapi
+    files: [contracts/customer.openapi.yaml]
+  - type: metadata                   # ← assembly.yaml 靠这一条随组件分发（§3.5）
+    files: [assembly.yaml]
+
+dependencies:
+  components: []                     # mdm 是只读枢纽，自己不调任何人（§2.6）
+  resources:
+    # ⚠️ engine 逐字参与匹配（设计书 §2.7.3.1）：这里写的词必须与
+    #    brickkit.yaml 的 resources[].engine 完全相同，平台不认别名。
+    - { kind: database, engine: postgresql }   # 产品名：不在替换范围
+    - { kind: mq,       engine: nats }         # 产品名：换 Kafka 是一次迁移，要让平台阻断
+    # 本组件不用对象存储；用到时写 { kind: storage, engine: s3 }
+    #   —— 能力名，默认实现是 RustFS，换 MinIO/S3/OSS 零改动
+
+configSchema:
+  type: object
+  properties:
+    pgSchema:                        # ⚠️ 不能叫 databaseSchema，DATABASE_ 是保留前缀
+      type: string
+      default: mdm_customer
+    iamJwksUrl:                      # JWT 本地验签的公钥来源。不对 IAM 建依赖边（决策 87）
+      type: string
+    otelBaseUrl:                     # ⚠️ 不能叫 otelEndpoint，*_ENDPOINT 是保留后缀
+      type: string
+      default: ""                    # 空 → Blackhole Exporter，零成本（§7.5）
+    defaultPageSize:
+      type: integer
+      default: 20
+    listWindowDays:                  # List API 的默认时间窗口（§11.4.1）
+      type: integer
+      default: 90
+
+deployment:
+  type: container
+  image: brickenterprise/mdm-customer:1.0.0
+  port: 8080                         # 端口册 registry/ports.tsv
+  extraPorts:
+    - { name: grpc, port: 9090 }     # → MDM_CUSTOMER_GRPC_ENDPOINT（值仍以 http:// 开头）
+  labels:                            # 平台只搬运，不解释键值。值必须是字符串
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+  resources:
+    requests: { cpu: "100m", memory: "128Mi" }
+
+migration:
+  command: ["./migrate", "up"]
+
+healthCheck:
+  type: http
+  path: /healthz                     # ⚠️ 只查本进程存活，严禁查库或查依赖组件（§12.3.6）
+  # startPeriodSeconds 不写：默认就是 60，Go 组件够用（§12.3.5）
