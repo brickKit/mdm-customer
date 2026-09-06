@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS billing_infos;
+DROP TABLE IF EXISTS contacts;
+DROP TABLE IF EXISTS customers;
