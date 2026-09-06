@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mdm-customer 事件清单",
+  "note": "Schema 演进铁律：只增不删不改（决策 19）。消费者宽容反序列化。",
+  "envelope": {
+    "description": "所有事件共用的信封。三个 Header 字段由 be-sdk 自动填/校验（§3.10）",
+    "required": ["subject", "aggregate_id", "version", "trace_id", "causation_id", "hop_count", "occurred_at"],
+    "properties": {
+      "subject":      { "type": "string", "pattern": "^[a-z]+\\.[a-z-]+\\.[a-z-]+\\.v[0-9]+$" },
+      "aggregate_id": { "type": "string" },
+      "version":      { "type": "integer", "description": "消费者只在严格大于本地当前值时更新（决策 43）" },
+      "trace_id":     { "type": "string" },
+      "causation_id": { "type": "string" },
+      "hop_count":    { "type": "integer", "maximum": 5, "description": "> 5 直接丢弃进 DLQ（决策 42）" },
+      "occurred_at":  { "type": "string", "format": "date-time" }
+    }
+  },
+  "events": [
+    {
+      "subject": "mdm.customer.created.v1",
+      "grade": "core",
+      "note": "核心交易事件：必须持久化、幂等、进死信队列（§3.10 事件分级）",
+      "payload": {
+        "type": "object",
+        "required": ["id", "code", "name", "status", "version"],
+        "properties": {
+          "id":           { "type": "string" },
+          "code":         { "type": "string" },
+          "name":         { "type": "string" },
+          "tax_no":       { "type": "string" },
+          "credit_limit": { "type": "string" },
+          "status":       { "type": "string", "enum": ["ACTIVE", "DISABLED"] },
+          "version":      { "type": "integer" }
+        }
+      }
+    },
+    {
+      "subject": "mdm.customer.updated.v1",
+      "grade": "core",
+      "payload": {
+        "type": "object",
+        "required": ["id", "name", "status", "version"],
+        "properties": {
+          "id":           { "type": "string" },
+          "name":         { "type": "string" },
+          "tax_no":       { "type": "string" },
+          "credit_limit": { "type": "string" },
+          "status":       { "type": "string", "enum": ["ACTIVE", "DISABLED"] },
+          "version":      { "type": "integer" }
+        }
+      }
+    },
+    {
+      "subject": "mdm.customer.disabled.v1",
+      "grade": "core",
+      "payload": {
+        "type": "object",
+        "required": ["id", "version"],
+        "properties": {
+          "id":      { "type": "string" },
+          "version": { "type": "integer" }
+        }
+      }
+    }
+  ]
+}

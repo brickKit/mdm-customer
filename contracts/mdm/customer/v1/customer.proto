@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package mdm.customer.v1;
+
+option go_package = "github.com/brickKit/mdm-customer/gen/mdm/customer/v1;customerv1";
+
+import "google/protobuf/timestamp.proto";
+
+// 客户主数据服务。mdm 是只读枢纽：被所有人读、自己不调任何人（§2.6）
+service CustomerService {
+  // ── 命令 ──
+  rpc Create   (CreateRequest)   returns (CreateResponse);
+  rpc Update   (UpdateRequest)   returns (UpdateResponse);
+  rpc SetStatus(SetStatusRequest) returns (SetStatusResponse);
+  rpc AddContact(AddContactRequest) returns (AddContactResponse);
+
+  // ── 读 ──
+  rpc Get       (GetRequest)       returns (Customer);
+  rpc List      (ListRequest)      returns (ListResponse);
+  // BatchGet 是 BFF 层 GraphQL Resolver 防 N+1 的唯一合法调用方式（§3.8）。
+  // 每个聚合根都必须提供它——没有它，Resolver 会退化成循环调 Get 的瀑布流。
+  rpc BatchGet  (BatchGetRequest)  returns (BatchGetResponse);
+  // GetSummary 返回摘要副本用的那几个字段。下游只存外键 + 摘要（§3.8）
+  rpc GetSummary(GetSummaryRequest) returns (GetSummaryResponse);
+}
+
+enum CustomerStatus {
+  CUSTOMER_STATUS_UNSPECIFIED = 0;
+  CUSTOMER_STATUS_ACTIVE      = 1;
+  // ⚠️ 不是终态：允许流转回 ACTIVE（客户后续可能重新建立业务关系）。
+  // 本组件的三张表都是主数据、不分区、不参与 §11.5 的归档流程（设计计划
+  // §7）——DISABLED 只是"当前不可用于新交易"，不是"可以搬去归档 schema"。
+  CUSTOMER_STATUS_DISABLED    = 2;
+}
+
+message Customer {
+  string   id            = 1;
+  string   code          = 2;   // 业务编号，唯一
+  string   name          = 3;
+  string   tax_no        = 4;
+  string   credit_limit  = 5;   // ⚠️ 金额一律用 string 传 decimal，绝不用 double
+  CustomerStatus status  = 6;
+  int64    version       = 7;   // 消费侧靠它做状态单向演进校验（§3.10）
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  repeated Contact     contacts      = 10;
+  repeated BillingInfo billing_infos = 11;
+}
+
+message Contact {
+  string id      = 1;
+  string name    = 2;
+  string phone   = 3;
+  string email   = 4;
+  bool   primary = 5;
+}
+
+message BillingInfo {
+  string id            = 1;
+  string title         = 2;
+  string tax_no        = 3;
+  string bank_name     = 4;
+  string bank_account  = 5;
+  string address       = 6;
+}
+
+// 摘要副本：外键 + name / status / version（§附录 I「摘要副本」）
+message CustomerSummary {
+  string id      = 1;
+  string code    = 2;
+  string name    = 3;
+  CustomerStatus status = 4;
+  int64  version = 5;
+}
+
+message CreateRequest {
+  // ⚠️ 所有跨组件写操作接口必须基于业务单号实现严格幂等（§4.6）——本组件
+  // 虽不在任何跨组件 Saga 链路里，但网络重试导致重复写的风险不限于
+  // Saga 场景，BFF/前端超时重试同样可能重复提交，成本很低所以仍然加上
+  // （设计计划 §3 的修正记录）。被调用方用唯一约束去重。
+  string idempotency_key = 1;
+  // code 可选：留空则按 "C" + 6 位自增数字生成；显式传入则校验唯一后使用
+  // （覆盖导入/ERP 迁移场景，设计计划 §9 待决问题 2）
+  string code         = 2;
+  string name         = 3;
+  string tax_no       = 4;
+  string credit_limit = 5;
+}
+message CreateResponse { Customer customer = 1; }
+
+message UpdateRequest {
+  string idempotency_key = 1;
+  string id           = 2;
+  int64  version      = 3;   // 乐观锁：与库里不一致则拒绝
+  string name         = 4;
+  string tax_no       = 5;
+  string credit_limit = 6;
+}
+message UpdateResponse { Customer customer = 1; }
+
+message SetStatusRequest {
+  string idempotency_key = 1;
+  string id      = 2;
+  int64  version = 3;
+  CustomerStatus status = 4;
+}
+message SetStatusResponse { Customer customer = 1; }
+
+message AddContactRequest {
+  string idempotency_key = 1;
+  string customer_id = 2;
+  Contact contact    = 3;
+}
+message AddContactResponse { Contact contact = 1; }
+
+message GetRequest { string id = 1; }
+
+message ListRequest {
+  // ⚠️ 禁止深 Offset，强制 Cursor Pagination（决策 53）。
+  // 未传时间范围时框架层自动注入最近 90 天（§11.4.1）——这里不给 offset 字段，
+  // 就是为了让「翻到第 1000 页」在契约层面不可表达。
+  string cursor    = 1;
+  int32  page_size = 2;
+  CustomerStatus status_filter = 3;
+  google.protobuf.Timestamp created_after  = 4;
+  google.protobuf.Timestamp created_before = 5;
+}
+message ListResponse {
+  repeated Customer customers   = 1;
+  string            next_cursor = 2;
+}
+
+message BatchGetRequest  { repeated string ids = 1; }
+message BatchGetResponse {
+  // 只返回找到的。缺失的 id 不报错——由调用方自己判断
+  repeated Customer customers = 1;
+  repeated string   missing_ids = 2;
+}
+
+message GetSummaryRequest  { repeated string ids = 1; }
+message GetSummaryResponse { repeated CustomerSummary summaries = 1; }

@@ -1,0 +1,236 @@
+openapi: 3.0.3
+info:
+  title: mdm-customer · 客户主数据
+  version: 1.0.0
+  description: |
+    对外 REST 面。内部 gRPC，外部 HTTP（§2.1）。
+    ⚠️ 不暴露 BatchGet——它是给其他组件的 gRPC 客户端用的批量读优化
+    （§2.1：内部 gRPC，外部 HTTP/GraphQL）。暴露到公网 REST 等于给了
+    一个"一次拿走全部客户"的接口。
+
+servers:
+  - url: /mdm/customer
+
+paths:
+  /healthz:
+    get:
+      summary: 健康检查
+      description: 只查本进程，不查依赖（§12.3.6）——PG 挂了这里仍返回 200。
+      operationId: healthz
+      responses:
+        "200":
+          description: OK
+
+  /customers:
+    get:
+      summary: List
+      operationId: listCustomers
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: 游标分页（决策 53），无 offset 参数——深分页在契约层面不可表达
+        - name: page_size
+          in: query
+          schema: { type: integer }
+        - name: status_filter
+          in: query
+          schema: { $ref: "#/components/schemas/CustomerStatus" }
+        - name: created_after
+          in: query
+          schema: { type: string, format: date-time }
+        - name: created_before
+          in: query
+          schema: { type: string, format: date-time }
+          description: 不传时间范围时框架层自动注入最近 90 天（§11.4.1）
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  customers:
+                    type: array
+                    items: { $ref: "#/components/schemas/Customer" }
+                  next_cursor: { type: string }
+    post:
+      summary: Create
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+
+  /customers/{id}:
+    get:
+      summary: Get
+      operationId: getCustomer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+    patch:
+      summary: Update
+      operationId: updateCustomer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+
+  /customers/{id}/status:
+    post:
+      summary: SetStatus
+      operationId: setCustomerStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetStatusRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+
+  /customers/{id}/contacts:
+    post:
+      summary: AddContact
+      operationId: addCustomerContact
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddContactRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Contact" }
+
+components:
+  schemas:
+    CustomerStatus:
+      type: string
+      enum: [ACTIVE, DISABLED]
+
+    Contact:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        phone: { type: string }
+        email: { type: string }
+        primary: { type: boolean }
+
+    BillingInfo:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        tax_no: { type: string }
+        bank_name: { type: string }
+        bank_account: { type: string }
+        address: { type: string }
+
+    Customer:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        tax_no: { type: string }
+        credit_limit:
+          type: string
+          description: 金额一律用 string 传 decimal，绝不用 double（跨语言精度）
+        status: { $ref: "#/components/schemas/CustomerStatus" }
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        contacts:
+          type: array
+          items: { $ref: "#/components/schemas/Contact" }
+        billing_infos:
+          type: array
+          items: { $ref: "#/components/schemas/BillingInfo" }
+
+    CreateRequest:
+      type: object
+      required: [idempotency_key, name]
+      properties:
+        idempotency_key:
+          type: string
+          description: 跨重试幂等键（§4.6），被调用方用唯一约束去重
+        code:
+          type: string
+          description: 可选，留空则按 "C" + 6 位自增数字生成
+        name: { type: string }
+        tax_no: { type: string }
+        credit_limit: { type: string }
+
+    UpdateRequest:
+      type: object
+      required: [idempotency_key, version]
+      properties:
+        idempotency_key: { type: string }
+        version:
+          type: integer
+          format: int64
+          description: 乐观锁，与库里不一致则拒绝
+        name: { type: string }
+        tax_no: { type: string }
+        credit_limit: { type: string }
+
+    SetStatusRequest:
+      type: object
+      required: [idempotency_key, version, status]
+      properties:
+        idempotency_key: { type: string }
+        version: { type: integer, format: int64 }
+        status: { $ref: "#/components/schemas/CustomerStatus" }
+
+    AddContactRequest:
+      type: object
+      required: [idempotency_key, contact]
+      properties:
+        idempotency_key: { type: string }
+        contact: { $ref: "#/components/schemas/Contact" }
