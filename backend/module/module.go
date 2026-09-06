@@ -62,7 +62,7 @@ func New(ctx context.Context, rt *besdk.Runtime) (*besdk.Module, error) {
 		// 循环永远等不到执行机会（计划原文的模板漏了这一点）。
 		Start: func(ctx context.Context) error {
 			errCh := make(chan error, 2)
-			go func() { errCh <- besdk.StartOutboxPump(ctx, rt.DB, schema, rt.NATS) }()
+			go func() { errCh <- besdk.StartOutboxPump(ctx, rt.DB, schema, rt.NATS, rt.Logger) }()
 			go func() { errCh <- partition.Start(ctx, rt.DB, role, schema, rt.Logger) }()
 
 			select {
