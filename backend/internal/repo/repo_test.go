@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	besdk "github.com/brickKit/be-sdk-go"
@@ -34,6 +35,27 @@ func testDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+// ⚠️ 补的测试，不在计划原文里：设计计划 §9 待决问题 2 定的规则是
+// "code 留空则自动生成 C + 6 位自增数字"，但这条规则只写在设计文档和
+// 字段注释里，一直没有真正的测试守着——写代码时才发现 Create 压根没
+// 实现这段逻辑，只是把空字符串原样插进了 NOT NULL 列。
+func TestCreate_code留空时自动生成(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	r := New(db, "mdm_customer_rw", "mdm_customer")
+
+	c, err := r.Create(ctx, CreateInput{IdempotencyKey: "test-autocode-001", Name: "自动编号客户"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Code == "" {
+		t.Fatal("code 留空时应该自动生成，实际还是空字符串")
+	}
+	if !strings.HasPrefix(c.Code, "C") || len(c.Code) != 7 {
+		t.Fatalf(`期望形如 "C" + 6 位数字，实际得到 %q`, c.Code)
+	}
 }
 
 func TestCreate_幂等(t *testing.T) {
@@ -103,6 +125,46 @@ func TestCreate_事件与业务数据同事务(t *testing.T) {
 	}
 	if m != 0 {
 		t.Fatalf("期望业务行也回滚，实际还留着 %d 条", m)
+	}
+}
+
+// ⚠️ 补的测试，不在计划原文里：AddContact 的 customer_id 是从
+// Customer.ID（string）传下来的，插的是 contacts.customer_id（bigint）
+// 列——之前在 BatchGet 上怀疑过 string 参数绑定 bigint 列会报类型不匹配
+// （查证后发现是自己manual psql PREPARE 的方式不对，pgx 实际按上下文推断
+// 参数类型，不会报错），这里顺手用真库验证 AddContact 这条路径同样没事，
+// 不必每次都靠"应该没问题"的推断。
+func TestAddContact_customer_id按字符串传也能正常插入(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	r := New(db, "mdm_customer_rw", "mdm_customer")
+
+	c, err := r.Create(ctx, CreateInput{IdempotencyKey: "test-contact-cust-001", Name: "联系人测试客户"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contact, err := r.AddContact(ctx, AddContactInput{
+		IdempotencyKey: "test-contact-001", CustomerID: c.ID,
+		Name: "张三", Phone: "13800000000", Primary: true,
+	})
+	if err != nil {
+		t.Fatalf("AddContact 不该报错：%v", err)
+	}
+	if contact.ID == "" || contact.Name != "张三" {
+		t.Fatalf("期望拿到新联系人，实际：%+v", contact)
+	}
+
+	// 幂等：同一个 idempotency_key 再来一次，不许新建
+	again, err := r.AddContact(ctx, AddContactInput{
+		IdempotencyKey: "test-contact-001", CustomerID: c.ID,
+		Name: "张三", Phone: "13800000000", Primary: true,
+	})
+	if err != nil {
+		t.Fatalf("幂等重试报错了：%v", err)
+	}
+	if again.ID != contact.ID {
+		t.Fatalf("幂等失效：第一次 %s，第二次 %s", contact.ID, again.ID)
 	}
 }
 

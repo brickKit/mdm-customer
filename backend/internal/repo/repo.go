@@ -80,15 +80,38 @@ func (r *Repo) Create(ctx context.Context, in CreateInput) (*Customer, error) {
 		}
 
 		var id int64
+		var code string
 		var createdAt, updatedAt time.Time
 		var version int64
-		if err := tx.QueryRowContext(ctx, `
-			INSERT INTO customers (code, name, tax_no, credit_limit)
-			VALUES ($1, $2, $3, $4)
-			RETURNING id, created_at, updated_at, version`,
-			in.Code, in.Name, in.TaxNo, creditLimit,
-		).Scan(&id, &createdAt, &updatedAt, &version); err != nil {
-			return fmt.Errorf("insert customers: %w", err)
+
+		if in.Code == "" {
+			// 留空则自动生成："C" + 6 位自增数字（设计计划 §9 待决问题 2）。
+			// 用 customers_id_seq 的下一个值同时决定 id 与生成的 code——
+			// 一次 nextval 定两样，不必插入之后再回改 code。显式插入 id，
+			// 不再走列的 DEFAULT nextval（那个值已经在这里用掉了）。
+			if err := tx.QueryRowContext(ctx, `SELECT nextval('customers_id_seq')`).Scan(&id); err != nil {
+				return fmt.Errorf("生成客户编号: %w", err)
+			}
+			code = fmt.Sprintf("C%06d", id)
+			if err := tx.QueryRowContext(ctx, `
+				INSERT INTO customers (id, code, name, tax_no, credit_limit)
+				VALUES ($1, $2, $3, $4, $5)
+				RETURNING created_at, updated_at, version`,
+				id, code, in.Name, in.TaxNo, creditLimit,
+			).Scan(&createdAt, &updatedAt, &version); err != nil {
+				return fmt.Errorf("insert customers: %w", err)
+			}
+		} else {
+			// 显式传入：唯一索引 customers_code_uniq 本身就会在冲突时报错。
+			code = in.Code
+			if err := tx.QueryRowContext(ctx, `
+				INSERT INTO customers (code, name, tax_no, credit_limit)
+				VALUES ($1, $2, $3, $4)
+				RETURNING id, created_at, updated_at, version`,
+				code, in.Name, in.TaxNo, creditLimit,
+			).Scan(&id, &createdAt, &updatedAt, &version); err != nil {
+				return fmt.Errorf("insert customers: %w", err)
+			}
 		}
 		idStr := strconv.FormatInt(id, 10)
 
@@ -99,7 +122,7 @@ func (r *Repo) Create(ctx context.Context, in CreateInput) (*Customer, error) {
 		}
 
 		payload, err := json.Marshal(map[string]any{
-			"id": idStr, "code": in.Code, "name": in.Name, "tax_no": in.TaxNo,
+			"id": idStr, "code": code, "name": in.Name, "tax_no": in.TaxNo,
 			"credit_limit": creditLimit, "status": "ACTIVE", "version": version,
 		})
 		if err != nil {
@@ -118,7 +141,7 @@ func (r *Repo) Create(ctx context.Context, in CreateInput) (*Customer, error) {
 		}
 
 		out = &Customer{
-			ID: idStr, Code: in.Code, Name: in.Name, TaxNo: in.TaxNo,
+			ID: idStr, Code: code, Name: in.Name, TaxNo: in.TaxNo,
 			CreditLimit: creditLimit, Status: "ACTIVE", Version: version,
 			CreatedAt: createdAt, UpdatedAt: updatedAt,
 		}
@@ -321,6 +344,79 @@ func (r *Repo) SetStatus(ctx context.Context, in SetStatusInput) (*Customer, err
 		return nil
 	})
 	return out, err
+}
+
+// Contact 是 contacts 表的一行。
+type Contact struct {
+	ID      string
+	Name    string
+	Phone   string
+	Email   string
+	Primary bool
+}
+
+// AddContactInput 对应 AddContactRequest。
+type AddContactInput struct {
+	IdempotencyKey string
+	CustomerID     string
+	Name           string
+	Phone          string
+	Email          string
+	Primary        bool
+}
+
+// AddContact 没有对应的事件——事件清单（events.json）里没有声明"联系人
+// 新增"这个 subject，不能顺手发明一个（决策 19：事件只增不删不改，改动
+// 要先走契约）。
+func (r *Repo) AddContact(ctx context.Context, in AddContactInput) (*Contact, error) {
+	var out *Contact
+	err := besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {
+		existingID, err := lookupIdempotency(ctx, tx, in.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if existingID != "" {
+			c, err := getContactByID(ctx, tx, existingID)
+			if err != nil {
+				return err
+			}
+			out = c
+			return nil
+		}
+
+		var id int64
+		if err := tx.QueryRowContext(ctx, `
+			INSERT INTO contacts (customer_id, name, phone, email, is_primary)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING id`,
+			in.CustomerID, in.Name, in.Phone, in.Email, in.Primary,
+		).Scan(&id); err != nil {
+			return fmt.Errorf("insert contacts: %w", err)
+		}
+		idStr := strconv.FormatInt(id, 10)
+
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO command_idempotency (idempotency_key, command, result_id) VALUES ($1, $2, $3)`,
+			in.IdempotencyKey, "AddContact", idStr); err != nil {
+			return fmt.Errorf("insert command_idempotency: %w", err)
+		}
+
+		out = &Contact{ID: idStr, Name: in.Name, Phone: in.Phone, Email: in.Email, Primary: in.Primary}
+		return nil
+	})
+	return out, err
+}
+
+func getContactByID(ctx context.Context, tx *sql.Tx, id string) (*Contact, error) {
+	row := tx.QueryRowContext(ctx,
+		`SELECT id, name, phone, email, is_primary FROM contacts WHERE id = $1`, id)
+	var rawID int64
+	var c Contact
+	if err := row.Scan(&rawID, &c.Name, &c.Phone, &c.Email, &c.Primary); err != nil {
+		return nil, fmt.Errorf("查 contacts: %w", err)
+	}
+	c.ID = strconv.FormatInt(rawID, 10)
+	return &c, nil
 }
 
 // BatchGet 是 gRPC BatchGet 的实现——BFF 层防 N+1 的唯一合法调用方式
