@@ -11,16 +11,14 @@ info:
 servers:
   - url: /mdm/customer
 
-paths:
-  /healthz:
-    get:
-      summary: 健康检查
-      description: 只查本进程，不查依赖（§12.3.6）——PG 挂了这里仍返回 200。
-      operationId: healthz
-      responses:
-        "200":
-          description: OK
+# ⚠️ /healthz 不在这份契约里：它不属于本组件的业务契约，是 be-sdk-go 的
+# NewGinEngine 给每个组件统一挂的，路径固定是裸根路径 /healthz（不带
+# /mdm/customer 前缀，§12.3.6）。写进这份按 servers: /mdm/customer 为
+# 前缀的契约里会隐含"路径是 /mdm/customer/healthz"，与真实行为不符——
+# 已用 brickkit up 生成的 docker-compose.yaml 健康检查探测地址核实过：
+# 探的是 http://localhost:8080/healthz，不带前缀。
 
+paths:
   /customers:
     get:
       summary: List

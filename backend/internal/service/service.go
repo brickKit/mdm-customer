@@ -76,6 +76,15 @@ func (s *Service) SetStatus(ctx context.Context, in SetStatusInput) (*repo.Custo
 	return c, nil
 }
 
+func (s *Service) AddContact(ctx context.Context, in repo.AddContactInput) (*repo.Contact, error) {
+	c, err := s.repo.AddContact(ctx, in)
+	if err != nil {
+		s.logger.Error("新增联系人失败", "customer_id", in.CustomerID, "error", err)
+		return nil, err
+	}
+	return c, nil
+}
+
 func (s *Service) Get(ctx context.Context, id string) (*repo.Customer, error) {
 	got, _, err := s.repo.BatchGet(ctx, []string{id})
 	if err != nil {
