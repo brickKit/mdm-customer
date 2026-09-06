@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -144,14 +145,182 @@ func getByID(ctx context.Context, tx *sql.Tx, id string) (*Customer, error) {
 	row := tx.QueryRowContext(ctx,
 		`SELECT id, code, name, tax_no, credit_limit, created_at, updated_at, version, status
 			FROM customers WHERE id = $1`, id)
+	c, err := scanCustomerRow(row)
+	if err != nil {
+		return nil, fmt.Errorf("查 customers: %w", err)
+	}
+	return c, nil
+}
+
+// rowScanner 是 *sql.Row 与 *sql.Rows 的公共部分——scanCustomerRow 两边
+// 都要用（Update/SetStatus 的 RETURNING 走 QueryRowContext，BatchGet
+// 走 QueryContext）。
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanCustomerRow(row rowScanner) (*Customer, error) {
 	var rawID int64
 	var c Customer
 	if err := row.Scan(&rawID, &c.Code, &c.Name, &c.TaxNo, &c.CreditLimit,
 		&c.CreatedAt, &c.UpdatedAt, &c.Version, &c.Status); err != nil {
-		return nil, fmt.Errorf("查 customers: %w", err)
+		return nil, err
 	}
 	c.ID = strconv.FormatInt(rawID, 10)
 	return &c, nil
+}
+
+// ErrVersionConflict 是乐观锁冲突：请求带的 version 与库里当前值不一致。
+// gRPC/HTTP 层把它映射成 Aborted/409（§4.6 幂等性铁律配套的并发控制）。
+var ErrVersionConflict = errors.New("version 冲突：与库里当前值不一致")
+
+// ErrNotFound：按 id 查不到。gRPC/HTTP 层映射成 NotFound/404。
+var ErrNotFound = errors.New("not found")
+
+// UpdateInput 对应 UpdateRequest。
+type UpdateInput struct {
+	IdempotencyKey string
+	ID             string
+	Version        int64 // 乐观锁：与库里不一致则拒绝
+	Name           string
+	TaxNo          string
+	CreditLimit    string
+}
+
+func (r *Repo) Update(ctx context.Context, in UpdateInput) (*Customer, error) {
+	var out *Customer
+	err := besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {
+		existingID, err := lookupIdempotency(ctx, tx, in.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if existingID != "" {
+			c, err := getByID(ctx, tx, existingID)
+			if err != nil {
+				return err
+			}
+			out = c
+			return nil
+		}
+
+		creditLimit := in.CreditLimit
+		if creditLimit == "" {
+			creditLimit = "0"
+		}
+
+		row := tx.QueryRowContext(ctx, `
+			UPDATE customers
+			SET name = $1, tax_no = $2, credit_limit = $3, version = version + 1, updated_at = now()
+			WHERE id = $4 AND version = $5
+			RETURNING id, code, name, tax_no, credit_limit, created_at, updated_at, version, status`,
+			in.Name, in.TaxNo, creditLimit, in.ID, in.Version)
+		c, err := scanCustomerRow(row)
+		if err == sql.ErrNoRows {
+			return ErrVersionConflict
+		}
+		if err != nil {
+			return fmt.Errorf("update customers: %w", err)
+		}
+
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO command_idempotency (idempotency_key, command, result_id) VALUES ($1, $2, $3)`,
+			in.IdempotencyKey, "Update", c.ID); err != nil {
+			return fmt.Errorf("insert command_idempotency: %w", err)
+		}
+
+		payload, err := json.Marshal(map[string]any{
+			"id": c.ID, "name": c.Name, "tax_no": c.TaxNo,
+			"credit_limit": c.CreditLimit, "status": c.Status, "version": c.Version,
+		})
+		if err != nil {
+			return err
+		}
+		if err := besdk.PublishOutbox(tx, r.schema, besdk.Event{
+			Subject: "mdm.customer.updated.v1", AggregateID: c.ID, Version: c.Version, Payload: payload,
+		}); err != nil {
+			return err
+		}
+
+		out = c
+		return nil
+	})
+	return out, err
+}
+
+// SetStatusInput 对应 SetStatusRequest。
+//
+// ⚠️ DISABLED 不是终态：允许流转回 ACTIVE（客户后续可能重新建立业务
+// 关系），与设计计划 §7"不归档"一致——两个方向都只受乐观锁约束，没有
+// 额外的状态机限制（设计计划 §3 的修正记录）。
+type SetStatusInput struct {
+	IdempotencyKey string
+	ID             string
+	Version        int64
+	Status         string // "ACTIVE" | "DISABLED"
+}
+
+func (r *Repo) SetStatus(ctx context.Context, in SetStatusInput) (*Customer, error) {
+	var out *Customer
+	err := besdk.WithTx(ctx, r.db, r.role, r.schema, func(tx *sql.Tx) error {
+		existingID, err := lookupIdempotency(ctx, tx, in.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if existingID != "" {
+			c, err := getByID(ctx, tx, existingID)
+			if err != nil {
+				return err
+			}
+			out = c
+			return nil
+		}
+
+		row := tx.QueryRowContext(ctx, `
+			UPDATE customers
+			SET status = $1, version = version + 1, updated_at = now()
+			WHERE id = $2 AND version = $3
+			RETURNING id, code, name, tax_no, credit_limit, created_at, updated_at, version, status`,
+			in.Status, in.ID, in.Version)
+		c, err := scanCustomerRow(row)
+		if err == sql.ErrNoRows {
+			return ErrVersionConflict
+		}
+		if err != nil {
+			return fmt.Errorf("update customers: %w", err)
+		}
+
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO command_idempotency (idempotency_key, command, result_id) VALUES ($1, $2, $3)`,
+			in.IdempotencyKey, "SetStatus", c.ID); err != nil {
+			return fmt.Errorf("insert command_idempotency: %w", err)
+		}
+
+		// ⚠️ 事件清单（contracts/events/customer.events.json）只声明了
+		// created/updated/disabled 三个 subject，没有 "enabled"——重新
+		// 启用没有专门事件，复用 updated（它的 payload 本来就带 status
+		// 字段）。不能顺手发明一个新 subject，那要先走一遍决策 19
+		// （事件只增不删不改）的流程（设计计划 §9、service_test.go）。
+		subject := "mdm.customer.updated.v1"
+		if in.Status == "DISABLED" {
+			subject = "mdm.customer.disabled.v1"
+		}
+		payload, err := json.Marshal(map[string]any{
+			"id": c.ID, "name": c.Name, "tax_no": c.TaxNo,
+			"credit_limit": c.CreditLimit, "status": c.Status, "version": c.Version,
+		})
+		if err != nil {
+			return err
+		}
+		if err := besdk.PublishOutbox(tx, r.schema, besdk.Event{
+			Subject: subject, AggregateID: c.ID, Version: c.Version, Payload: payload,
+		}); err != nil {
+			return err
+		}
+
+		out = c
+		return nil
+	})
+	return out, err
 }
 
 // BatchGet 是 gRPC BatchGet 的实现——BFF 层防 N+1 的唯一合法调用方式
@@ -185,14 +354,11 @@ func (r *Repo) BatchGet(ctx context.Context, ids []string) (found []*Customer, m
 }
 
 func scanCustomer(rows *sql.Rows) (string, *Customer, error) {
-	var rawID int64
-	var c Customer
-	if err := rows.Scan(&rawID, &c.Code, &c.Name, &c.TaxNo, &c.CreditLimit,
-		&c.CreatedAt, &c.UpdatedAt, &c.Version, &c.Status); err != nil {
+	c, err := scanCustomerRow(rows)
+	if err != nil {
 		return "", nil, err
 	}
-	c.ID = strconv.FormatInt(rawID, 10)
-	return c.ID, &c, nil
+	return c.ID, c, nil
 }
 
 // ListInput 对应 ListRequest。刻意没有 offset 字段——深分页在契约层面就
