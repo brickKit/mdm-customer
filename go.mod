@@ -3,7 +3,7 @@ module github.com/brickKit/mdm-customer
 go 1.25.0
 
 require (
-	github.com/brickKit/be-sdk-go v0.1.0
+	github.com/brickKit/be-sdk-go v0.1.3
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.10.0
 	google.golang.org/grpc v1.83.2
@@ -71,4 +71,5 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
