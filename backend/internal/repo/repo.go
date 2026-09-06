@@ -84,6 +84,12 @@ func (r *Repo) Create(ctx context.Context, in CreateInput) (*Customer, error) {
 		var createdAt, updatedAt time.Time
 		var version int64
 
+		// ⚠️ RETURNING 里带上 credit_limit 并把它 Scan 回 creditLimit——不能
+		// 直接把调用方传入的原始字符串塞回返回值：NUMERIC(18,2) 落库时会被
+		// 规整成两位小数（"0" 存完读出来是 "0.00"），原样回传会让 Create
+		// 的返回值与随后 Get 同一条记录时的格式不一致（L3 测试
+		// TestCreate_creditLimit为0时允许 测出来的，之前的测试全传的是
+		// 已经带两位小数的输入，没暴露过这条）。
 		if in.Code == "" {
 			// 留空则自动生成："C" + 6 位自增数字（设计计划 §9 待决问题 2）。
 			// 用 customers_id_seq 的下一个值同时决定 id 与生成的 code——
@@ -96,9 +102,9 @@ func (r *Repo) Create(ctx context.Context, in CreateInput) (*Customer, error) {
 			if err := tx.QueryRowContext(ctx, `
 				INSERT INTO customers (id, code, name, tax_no, credit_limit)
 				VALUES ($1, $2, $3, $4, $5)
-				RETURNING created_at, updated_at, version`,
+				RETURNING created_at, updated_at, version, credit_limit`,
 				id, code, in.Name, in.TaxNo, creditLimit,
-			).Scan(&createdAt, &updatedAt, &version); err != nil {
+			).Scan(&createdAt, &updatedAt, &version, &creditLimit); err != nil {
 				return fmt.Errorf("insert customers: %w", err)
 			}
 		} else {
@@ -107,9 +113,9 @@ func (r *Repo) Create(ctx context.Context, in CreateInput) (*Customer, error) {
 			if err := tx.QueryRowContext(ctx, `
 				INSERT INTO customers (code, name, tax_no, credit_limit)
 				VALUES ($1, $2, $3, $4)
-				RETURNING id, created_at, updated_at, version`,
+				RETURNING id, created_at, updated_at, version, credit_limit`,
 				code, in.Name, in.TaxNo, creditLimit,
-			).Scan(&id, &createdAt, &updatedAt, &version); err != nil {
+			).Scan(&id, &createdAt, &updatedAt, &version, &creditLimit); err != nil {
 				return fmt.Errorf("insert customers: %w", err)
 			}
 		}

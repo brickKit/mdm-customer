@@ -21,6 +21,8 @@ func ToStatus(err error) error {
 		return status.Error(codes.Aborted, err.Error())
 	case errors.Is(err, repo.ErrNotFound):
 		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, ErrInvalidArgument):
+		return status.Error(codes.InvalidArgument, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}

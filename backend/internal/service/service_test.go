@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"os"
 	"testing"
@@ -160,5 +161,60 @@ func TestSetStatus_重新启用时发出updated事件而不是专门事件(t *te
 	}
 	if n != 1 {
 		t.Fatalf("重新启用应该发 mdm.customer.updated.v1（不是专门的 enabled 事件），实际匹配 %d 条", n)
+	}
+}
+
+// ⚠️ L3 补充测试（Task 16 步骤 3.5）。计划原文给的例子是"Create 传空
+// code → InvalidArgument"，但 code 留空是设计计划 §9 定的自动编号触发
+// 条件（见 repo_test.go 的 TestCreate_code留空时自动生成），不是错误——
+// 那条例子本身与已经确认的设计矛盾（自查第 0 条：L2 结论挡路几乎总是
+// 例子/理解错了，不是反过来）。改验真正没有兜底的必填字段 name。
+func TestCreate_name为空时拒绝且不落库(t *testing.T) {
+	svc, _, db := newTestService(t)
+	ctx := context.Background()
+
+	_, err := svc.Create(ctx, repo.CreateInput{
+		IdempotencyKey: "svc-l3-name-empty", Code: "C-L3-NAME-EMPTY", Name: ""})
+	if !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("name 为空应该拒绝并返回 ErrInvalidArgument，实际：%v", err)
+	}
+
+	var n int
+	if err := besdk.WithTx(ctx, db, "mdm_customer_rw", "mdm_customer",
+		func(tx *sql.Tx) error {
+			return tx.QueryRow(`SELECT count(*) FROM customers WHERE code = $1`, "C-L3-NAME-EMPTY").Scan(&n)
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("校验应该发生在落库之前，实际库里已经有 %d 条", n)
+	}
+}
+
+func TestCreate_creditLimit为负数时拒绝(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+
+	_, err := svc.Create(ctx, repo.CreateInput{
+		IdempotencyKey: "svc-l3-credit-neg", Code: "C-L3-CREDIT-NEG", Name: "负数额度测试", CreditLimit: "-1"})
+	if !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("credit_limit 为负数应该拒绝并返回 ErrInvalidArgument，实际：%v", err)
+	}
+}
+
+// TestCreate_creditLimit为0时允许 是上面那条的边界对照组：0 是合法值
+// （新客户还没有信用额度是正常状态），不能因为校验"不能为负"顺手把 0
+// 也拦下来。
+func TestCreate_creditLimit为0时允许(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+
+	c, err := svc.Create(ctx, repo.CreateInput{
+		IdempotencyKey: "svc-l3-credit-zero", Code: "C-L3-CREDIT-ZERO", Name: "零额度测试", CreditLimit: "0"})
+	if err != nil {
+		t.Fatalf("credit_limit 为 0 应该允许，实际报错：%v", err)
+	}
+	if c.CreditLimit != "0.00" {
+		t.Fatalf("期望落库后是 0.00，实际 %q", c.CreditLimit)
 	}
 }

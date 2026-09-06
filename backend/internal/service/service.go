@@ -7,10 +7,18 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"strconv"
 
 	"github.com/brickKit/mdm-customer/backend/internal/repo"
 )
+
+// ErrInvalidArgument 是入参本身不合法（不是数据库层面的冲突/缺失），
+// grpc/http 两层都通过 ToStatus 把它映射成 InvalidArgument/400。这一层
+// 是 http/grpc 唯一共用的入口，校验只写这一处，两个协议都不用各写一遍。
+var ErrInvalidArgument = errors.New("参数不合法")
 
 type Service struct {
 	repo   *repo.Repo
@@ -21,7 +29,31 @@ func New(r *repo.Repo, logger *slog.Logger) *Service {
 	return &Service{repo: r, logger: logger}
 }
 
+// validateCreditLimit 只做格式/正负号校验（合法非负小数），不代替
+// NUMERIC(18,2) 的精度校验——那是数据库自己的事，多的精度校验只是把
+// 数据库已经在做的事情在 Go 这层再抄一遍（决策：金额一律 string 传
+// decimal，这里解析成 float64 只是临时校验用，不用于存储或运算）。
+func validateCreditLimit(s string) error {
+	if s == "" {
+		return nil // repo 层留空时默认成 "0"
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return fmt.Errorf("%w: credit_limit 不是合法数字：%q", ErrInvalidArgument, s)
+	}
+	if f < 0 {
+		return fmt.Errorf("%w: credit_limit 不能为负数：%q", ErrInvalidArgument, s)
+	}
+	return nil
+}
+
 func (s *Service) Create(ctx context.Context, in repo.CreateInput) (*repo.Customer, error) {
+	if in.Name == "" {
+		return nil, fmt.Errorf("%w: name 不能为空", ErrInvalidArgument)
+	}
+	if err := validateCreditLimit(in.CreditLimit); err != nil {
+		return nil, err
+	}
 	c, err := s.repo.Create(ctx, in)
 	if err != nil {
 		s.logger.Error("创建客户失败", "code", in.Code, "error", err)
@@ -40,6 +72,12 @@ type UpdateInput struct {
 }
 
 func (s *Service) Update(ctx context.Context, in UpdateInput) (*repo.Customer, error) {
+	if in.Name == "" {
+		return nil, fmt.Errorf("%w: name 不能为空", ErrInvalidArgument)
+	}
+	if err := validateCreditLimit(in.CreditLimit); err != nil {
+		return nil, err
+	}
 	c, err := s.repo.Update(ctx, repo.UpdateInput{
 		IdempotencyKey: in.IdempotencyKey,
 		ID:             in.ID,

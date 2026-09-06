@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	besdk "github.com/brickKit/be-sdk-go"
 	_ "github.com/jackc/pgx/v5/stdlib" // §12.4：不用 lib/pq，驱动名注册为 "pgx"
@@ -196,5 +198,116 @@ func TestList_未传时间范围时自动注入90天窗口(t *testing.T) {
 	days := q.To.Sub(q.From).Hours() / 24
 	if days < 89 || days > 91 {
 		t.Fatalf("默认窗口应约为 90 天，实际 %.1f 天", days)
+	}
+}
+
+// TestList_最后一页返回空nextCursor而不是报错 是 L3（Task 16 步骤 3.5）：
+// SQL 里"多取一条判断有没有下一页"这段逻辑（List 实现里的
+// len(customers) > q.Limit 分支）只有真的跑到最后一页才会走到 else
+// 分支，不靠真库测不出来。
+func TestList_最后一页返回空nextCursor而不是报错(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	r := New(db, "mdm_customer_rw", "mdm_customer")
+
+	c, err := r.Create(ctx, CreateInput{IdempotencyKey: "test-lastpage-001", Name: "分页边界测试"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := r.List(ctx, ListInput{
+		PageSize:      500,
+		CreatedAfter:  c.CreatedAt.Add(-time.Second),
+		CreatedBefore: c.CreatedAt.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("已经是最后一页不该报错：%v", err)
+	}
+	if res.NextCursor != "" {
+		t.Fatalf("已经是最后一页，期望 next_cursor 为空，实际 %q", res.NextCursor)
+	}
+}
+
+// TestCreate_creditLimit超出精度时报错且不落库 是 L3 边界值测试：
+// NUMERIC(18,2) 最多 16 位整数 + 2 位小数，17 位整数部分必然溢出。
+// ⚠️ 不是"先插入、报错后在 Go 层选择忽略"——这里验证的是相反方向：
+// 数据库真的报错时，事务必须整体回滚，不能留下部分痕迹（同 A4e 那条
+// 踩坑：一条语句真失败之后整个事务已经 aborted，这里确认业务行确实
+// 没有留下来，不是重复造轮子去验证 PostgreSQL 自己的行为）。
+func TestCreate_creditLimit超出精度时报错且不落库(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	r := New(db, "mdm_customer_rw", "mdm_customer")
+
+	_, err := r.Create(ctx, CreateInput{
+		IdempotencyKey: "test-precision-001", Code: "C-PRECISION",
+		Name: "精度溢出测试", CreditLimit: "999999999999999999.99", // 17 位整数，超出 NUMERIC(18,2)
+	})
+	if err == nil {
+		t.Fatal("超出 NUMERIC(18,2) 精度应该报错，实际没报错")
+	}
+
+	var n int
+	if err := besdk.WithTx(ctx, db, "mdm_customer_rw", "mdm_customer",
+		func(tx *sql.Tx) error {
+			return tx.QueryRow(`SELECT count(*) FROM customers WHERE code = $1`, "C-PRECISION").Scan(&n)
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("精度溢出应该让整个事务回滚，不留痕迹，实际库里有 %d 条", n)
+	}
+}
+
+// TestCreate_并发相同idempotencyKey只落一条 是 L3 并发测试（-race 下跑）。
+// ⚠️ Code 故意留空（走 nextval 自动编号）：如果两个并发请求用同一个显式
+// code，会在 customers_code_uniq 上先撞车，测的就变成"code 唯一约束"
+// 而不是"idempotency_key 去重"本身——两件事要分开验。
+// command_idempotency.idempotency_key 是 PRIMARY KEY（见 002 迁移），
+// 并发下"后提交的那个"会在这张表上拿到唯一约束冲突而整体回滚（包含它
+// 自己插入的那条 customers 行），所以无论多少个并发请求，落地的
+// customers 行永远只有 1 条——这条断言不要求每个并发调用都成功返回，
+// 只要求最终状态只有 1 条，这是设计计划对"幂等"的实际承诺。
+func TestCreate_并发相同idempotencyKey只落一条(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	r := New(db, "mdm_customer_rw", "mdm_customer")
+
+	const key = "test-concurrent-idem-001"
+	const n = 8
+	var wg sync.WaitGroup
+	oks := make([]bool, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := r.Create(ctx, CreateInput{IdempotencyKey: key, Name: "并发测试"})
+			oks[i] = err == nil
+		}(i)
+	}
+	wg.Wait()
+
+	okCount := 0
+	for _, ok := range oks {
+		if ok {
+			okCount++
+		}
+	}
+	if okCount == 0 {
+		t.Fatal("并发请求全部失败，至少应该有一个赢家")
+	}
+
+	var count int
+	if err := besdk.WithTx(ctx, db, "mdm_customer_rw", "mdm_customer",
+		func(tx *sql.Tx) error {
+			return tx.QueryRow(`
+				SELECT count(*) FROM customers c
+				JOIN command_idempotency ci ON ci.result_id = c.id::text
+				WHERE ci.idempotency_key = $1`, key).Scan(&count)
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("并发 %d 次相同 idempotency_key，应该只落 1 条 customers 记录，实际 %d 条", n, count)
 	}
 }
