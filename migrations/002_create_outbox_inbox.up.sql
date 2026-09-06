@@ -33,6 +33,16 @@ CREATE TABLE event_outbox_2026_09_21 PARTITION OF event_outbox
 CREATE INDEX event_outbox_pending ON event_outbox (status, created_at)
   WHERE status = 'PENDING';
 
+-- ⚠️ 实测踩坑：建分区（CREATE TABLE ... PARTITION OF）在 PostgreSQL 里
+-- 要求执行者是父表的 owner，光有 ALTER DEFAULT PRIVILEGES 给的
+-- SELECT/INSERT/UPDATE/DELETE 不够。迁移本身是用 DATABASE_USER（平台
+-- 注入的管理凭据，本项目是 postgres）连库跑的，建出来的表默认属于那个
+-- 账号；而分区维护后台任务是组件运行时用 mdm_customer_rw（SET LOCAL
+-- ROLE 切换）建未来的分区。两者不是同一个身份，所以这里必须显式把
+-- owner 转给 mdm_customer_rw——customers/contacts/billing_infos 不需要
+-- 这一步，因为它们不分区，运行时不会有代码去 ALTER 它们。
+ALTER TABLE event_outbox OWNER TO mdm_customer_rw;
+
 CREATE TABLE event_inbox (
     id              BIGSERIAL,
     idempotency_key TEXT        NOT NULL,
@@ -54,6 +64,9 @@ CREATE TABLE event_inbox_2026_09_21 PARTITION OF event_inbox
   FOR VALUES FROM ('2026-09-21') TO ('2026-09-28');
 -- 消费幂等靠这个唯一约束（§4.6：被调用方在数据库中使用唯一约束去重）
 CREATE UNIQUE INDEX event_inbox_idem ON event_inbox (idempotency_key, created_at);
+
+-- 同上：分区维护后台任务要能给 event_inbox 建未来的分区。
+ALTER TABLE event_inbox OWNER TO mdm_customer_rw;
 
 -- 写操作的幂等表（命令侧，与事件消费侧分开）。Create/Update/SetStatus/
 -- AddContact 的 idempotency_key 落在这里去重（设计计划 §3 的修正记录）
