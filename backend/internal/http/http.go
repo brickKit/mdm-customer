@@ -16,20 +16,27 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	besdk "github.com/brickKit/be-sdk-go"
 	"github.com/brickKit/mdm-customer/backend/internal/repo"
 	"github.com/brickKit/mdm-customer/backend/internal/service"
 )
 
 // RegisterRoutes 挂载业务路由。eng 已经是 besdk.NewGinEngine 产出的、
 // 挂好中间件的 engine——这里只负责注册业务 handler。
+//
+// ⚠️ 全部标 besdk.Public 是阶段二的刻意状态，不是漏填权限键：阶段三
+// infra-authz 上线前，RequirePermission 是 fail-closed stub，标真键会
+// 让这六条接口在 stub 下全部 403，等于把组件关掉。阶段三上线后要把这
+// 六条改成 assembly.yaml 里对应的真实权限键（mdm.customer.view/create/
+// edit），到时候这条注释一起删掉。
 func RegisterRoutes(eng *gin.Engine, svc *service.Service) {
 	g := eng.Group("/mdm/customer")
-	g.GET("/customers", listHandler(svc))
-	g.GET("/customers/:id", getHandler(svc))
-	g.POST("/customers", createHandler(svc))
-	g.PATCH("/customers/:id", updateHandler(svc))
-	g.POST("/customers/:id/status", setStatusHandler(svc))
-	g.POST("/customers/:id/contacts", addContactHandler(svc))
+	besdk.GET(g, "/customers", besdk.Public, listHandler(svc))
+	besdk.GET(g, "/customers/:id", besdk.Public, getHandler(svc))
+	besdk.POST(g, "/customers", besdk.Public, createHandler(svc))
+	besdk.PATCH(g, "/customers/:id", besdk.Public, updateHandler(svc))
+	besdk.POST(g, "/customers/:id/status", besdk.Public, setStatusHandler(svc))
+	besdk.POST(g, "/customers/:id/contacts", besdk.Public, addContactHandler(svc))
 }
 
 type customerDTO struct {

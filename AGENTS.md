@@ -29,6 +29,8 @@
 
 **REST 前缀：** `/mdm/customer/**`。`BatchGet` 不暴露到 REST——它是给其他组件 gRPC 客户端用的批量读优化，不是终端用户的操作。
 
+⚠️ **六条 REST 路由目前全部标 `besdk.Public`**（阶段二 Task 1）——这是刻意的临时状态，不是漏填权限键：阶段三 `infra-authz` 上线前 `RequirePermission` 是 fail-closed stub，标真键会让这六条在 stub 下全部 403。**阶段三上线后要回来把它们改成 `assembly.yaml` 里对应的真实权限键**（`mdm.customer.view`/`create`/`edit`），改完这条注释和 `http.go` 里对应的注释一起删。
+
 **发布事件：** `mdm.customer.created.v1` / `.updated.v1` / `.disabled.v1`，全部走 Outbox，下游按 `version` 单向递增更新摘要副本。
 
 **消费事件：** 无——消费一条就是在给只读枢纽加一条依赖边。
