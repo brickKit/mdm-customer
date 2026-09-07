@@ -3,7 +3,7 @@ module github.com/brickKit/mdm-customer
 go 1.25.0
 
 require (
-	github.com/brickKit/be-sdk-go v0.1.7
+	github.com/brickKit/be-sdk-go v0.1.9
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.10.0
