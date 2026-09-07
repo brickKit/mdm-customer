@@ -44,12 +44,13 @@ configSchema:
     otelBaseUrl:                     # ⚠️ 不能叫 otelEndpoint，*_ENDPOINT 是保留后缀
       type: string
       default: ""                    # 空 → Blackhole Exporter，零成本（§7.5）
-    defaultPageSize:
-      type: integer
-      default: 20
-    listWindowDays:                  # List API 的默认时间窗口（§11.4.1）
-      type: integer
-      default: 90
+    # ⚠️ 没有 defaultPageSize/listWindowDays：Task 18 校准文档时发现这两项
+    # 曾经声明在这里但从未被代码读取——List 的默认页大小/时间窗口实际上是
+    # besdk.ListWindow 的包级常量（defaultLimit=50、defaultWindow=90 天），
+    # 请求方不传时直接生效，不经过这两个 configSchema 项；写在这里只会让
+    # 人以为改了 brickkit.yaml 就能调页大小（改了也不会有任何效果），且
+    # defaultPageSize 声明的默认值 20 与实际生效的 50 对不上——两条都是
+    # 死配置，删掉比留着"看起来能配实际不能配"更诚实。
 
 deployment:
   type: container

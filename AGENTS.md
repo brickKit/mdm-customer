@@ -49,6 +49,8 @@
 | 省掉 `BatchGet` 只留 `Get` | 单测照样绿。但 BFF 的 GraphQL Resolver 只能退化成循环调 `Get` 的瀑布流，10 个订单查客户就是 10 次 RPC | §3.8、决策 23 |
 | 把 `customers`/`contacts`/`billing_infos` 建成分区表，或往里塞归档逻辑 | 迁移能跑通、代码能编译——但这三张表是主数据不是交易流水，§11.2.5 的分区大表清单里没有 `mdm-*`；建成分区表之后回头想撤销，代价是一次真实的数据迁移 | 设计计划 §7 |
 | 往 `contacts`/`billing_infos` 加 `owner_id`/`dept_path` 这类数据权限列 | 建表能过，迁移能跑——但本组件 `data_scopes: none`，加了这些列没有任何代码会去用它们过滤，纯粹是死配置，且与"客户主数据全员可见"的设计矛盾 | §14.2.2、§14.2.5 |
+| `Create` 插入成功后直接用调用方传入的原始字符串回填 `CreditLimit`，不 `RETURNING` 读回落库后的值 | 正常输入（本来就带两位小数）测不出来——`credit_limit` 传 `"0"` 时 `Create` 的响应体是 `"0"`，但同一条记录随后 `Get`/`List` 读到的是 `NUMERIC(18,2)` 规整过的 `"0.00"`，两次读到的同一个字段不一致 | Task 16 L3 测试 `TestCreate_creditLimit为0时允许` 测出来的，已修（两个 `INSERT` 分支的 `RETURNING` 都加了 `credit_limit`） |
+| 往 `configSchema` 里声明一个配置项，却不在代码里接它 | `component.yaml` 生成的 compose 照样注入这个环境变量、`up` 一路绿灯——症状不是报错，是**别人改了这个配置项的值，行为完全没变**。本组件真实踩过：`defaultPageSize`/`listWindowDays` 声明了却从没接（`List` 的默认页大小/时间窗口其实是 `be-sdk-go` 的包级常量），`defaultPageSize` 写的默认值 `20` 还跟实际生效的 `50` 对不上，两条都已删除 | Task 18 校准文档时发现，见 `component.yaml` 里对应注释 |
 
 ## 改代码前的自查
 

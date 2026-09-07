@@ -1,9 +1,9 @@
 IMAGE   := brickenterprise/mdm-customer
 VERSION := $(shell grep -E '^\s+version:' component.yaml | head -1 | awk '{print $$2}')
 
-.PHONY: all check-version test image migrate-idempotent dag-check contract-check import-scan module-check smoke
+.PHONY: all check-version test image migrate-idempotent dag-check contract-check import-scan module-check docs-check smoke
 
-all: check-version test image migrate-idempotent dag-check contract-check import-scan module-check
+all: check-version test image migrate-idempotent dag-check contract-check import-scan module-check docs-check
 
 check-version:  ## component.yaml 的 version 与 git tag 不许分叉（§9.1 两个真相源）
 	@tag="$$(git describe --tags --exact-match 2>/dev/null || true)"; \
@@ -86,6 +86,9 @@ module-check:  ## 铁律七：模块能被合进外壳（§12.5、§13.3 铁律�
 	 if [ -n "$$bad" ]; then \
 	   echo "✗ 用了 §12.4 禁掉的库："; echo "$$bad"; exit 1; fi
 	@echo "✓ 铁律七：入口签名对、零 os.Getenv、零进程级 init、栈合规"
+
+docs-check:  ## 四份文档结构检查（总纲 §4 SOP-D）
+	@bash ../../../infra/scripts/docs-check.sh mdm-customer
 
 smoke:  ## 原则一：只装这一个组件就能起来（§1.5、§3.11 第 8 条）
 	@# 详细动作见 Task 17 的六项验收；这里只做最小闭环。
