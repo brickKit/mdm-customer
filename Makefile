@@ -1,10 +1,19 @@
 IMAGE   := brickenterprise/mdm-customer
 VERSION := $(shell grep -E '^\s+version:' component.yaml | head -1 | awk '{print $$2}')
 
-.PHONY: all check-version test image migrate-idempotent dag-check contract-check import-scan module-check docs-check smoke
+.DEFAULT_GOAL := help
+.PHONY: help all check-version test image migrate-idempotent dag-check contract-check import-scan module-check docs-check smoke
 
-all: check-version test image migrate-idempotent dag-check contract-check import-scan module-check docs-check
+help:  ## 列出所有目标
+	@awk 'BEGIN{FS=":.*##"; printf "\n用法: make <目标>\n\n"} \
+	     /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2} \
+	     /^##@/ {printf "\n\033[1m%s\033[0m\n", substr($$0,5)}' $(MAKEFILE_LIST)
+	@echo ""
 
+##@ 汇总
+all: check-version test image migrate-idempotent dag-check contract-check import-scan module-check docs-check  ## 8 个门禁（不含 smoke，它要真起容器）
+
+##@ 9 个门禁
 check-version:  ## component.yaml 的 version 与 git tag 不许分叉（§9.1 两个真相源）
 	@tag="$$(git describe --tags --exact-match 2>/dev/null || true)"; \
 	 if [ -n "$$tag" ] && [ "$$tag" != "v$(VERSION)" ]; then \
@@ -14,7 +23,7 @@ check-version:  ## component.yaml 的 version 与 git tag 不许分叉（§9.1 �
 test:  ## 需要 TEST_PG_DSN 与 TEST_NATS_URL（可选，缺省走 nats.DefaultURL）
 	go test ./... -race -count=1
 
-image:
+image:  ## 建镜像并确认里面有 sh + wget（§12.3.7 健康检查需要）
 	docker build -t $(IMAGE):$(VERSION) .
 	@# 镜像里必须有 /bin/sh + wget，否则平台的 CMD-SHELL 健康检查永远失败，
 	@# 症状是「组件日志写着已就绪，而平台说它不健康」（§12.3.7）
