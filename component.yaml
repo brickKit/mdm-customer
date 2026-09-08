@@ -4,7 +4,7 @@ kind: Component
 metadata:
   id: mdm/customer                   # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
   name: 客户主数据
-  version: 1.0.0                     # 精确版本，不接受 ^ / ~ / latest
+  version: 1.0.1                     # 精确版本，不接受 ^ / ~ / latest
   description: 客户名称、税号、信用额度、状态、联系人、开票信息
   license: Apache-2.0                # 平台支持这一格（manifest.Metadata.License），填上
   vendor: brickKit                   # 同上，可选但填了对交付文档有用
