@@ -4,7 +4,10 @@ kind: Component
 metadata:
   id: mdm/customer                   # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
   name: 客户主数据
-  version: 1.0.1                     # 精确版本，不接受 ^ / ~ / latest
+  version: 1.0.2                     # 精确版本，不接受 ^ / ~ / latest
+                                      # v1.0.2：纯重新构建，deployment.image 之前一直
+                                      # 停在 1.0.0，v1.0.1 的源码改动从没真的打进镜像
+                                      # 过（阶段三 Task 4 核对 brickkit up 真机时发现）
   description: 客户名称、税号、信用额度、状态、联系人、开票信息
   license: Apache-2.0                # 平台支持这一格（manifest.Metadata.License），填上
   vendor: brickKit                   # 同上，可选但填了对交付文档有用
@@ -54,7 +57,7 @@ configSchema:
 
 deployment:
   type: container
-  image: brickenterprise/mdm-customer:1.0.0
+  image: brickenterprise/mdm-customer:1.0.2
   port: 8080                         # 端口册 registry/ports.tsv
   extraPorts:
     - { name: grpc, port: 9090 }     # → MDM_CUSTOMER_GRPC_ENDPOINT（值仍以 http:// 开头）
