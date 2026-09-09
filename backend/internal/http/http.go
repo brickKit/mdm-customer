@@ -24,19 +24,18 @@ import (
 // RegisterRoutes 挂载业务路由。eng 已经是 besdk.NewGinEngine 产出的、
 // 挂好中间件的 engine——这里只负责注册业务 handler。
 //
-// ⚠️ 全部标 besdk.Public 是阶段二的刻意状态，不是漏填权限键：阶段三
-// infra-authz 上线前，RequirePermission 是 fail-closed stub，标真键会
-// 让这六条接口在 stub 下全部 403，等于把组件关掉。阶段三上线后要把这
-// 六条改成 assembly.yaml 里对应的真实权限键（mdm.customer.view/create/
-// edit），到时候这条注释一起删掉。
+// 阶段三 Task 6：权限键从阶段二的 besdk.Public 换成 assembly.yaml 里
+// 声明的真实键——判定本体已在 Task 5 换成真实 bundle 查找，这一步只改
+// 调用点的字面量。`data_scopes: none`（客户主数据全员可见），本组件不
+// 需要任何数据范围过滤。
 func RegisterRoutes(eng *gin.Engine, svc *service.Service) {
 	g := eng.Group("/mdm/customer")
-	besdk.GET(g, "/customers", besdk.Public, listHandler(svc))
-	besdk.GET(g, "/customers/:id", besdk.Public, getHandler(svc))
-	besdk.POST(g, "/customers", besdk.Public, createHandler(svc))
-	besdk.PATCH(g, "/customers/:id", besdk.Public, updateHandler(svc))
-	besdk.POST(g, "/customers/:id/status", besdk.Public, setStatusHandler(svc))
-	besdk.POST(g, "/customers/:id/contacts", besdk.Public, addContactHandler(svc))
+	besdk.GET(g, "/customers", "mdm.customer.view", listHandler(svc))
+	besdk.GET(g, "/customers/:id", "mdm.customer.view", getHandler(svc))
+	besdk.POST(g, "/customers", "mdm.customer.create", createHandler(svc))
+	besdk.PATCH(g, "/customers/:id", "mdm.customer.update", updateHandler(svc))
+	besdk.POST(g, "/customers/:id/status", "mdm.customer.set_status", setStatusHandler(svc))
+	besdk.POST(g, "/customers/:id/contacts", "mdm.customer.add_contact", addContactHandler(svc))
 }
 
 type customerDTO struct {
