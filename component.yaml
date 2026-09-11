@@ -4,7 +4,11 @@ kind: Component
 metadata:
   id: mdm/customer                   # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
   name: 客户主数据
-  version: 1.0.3                     # 精确版本，不接受 ^ / ~ / latest
+  version: 1.0.4                     # 精确版本，不接受 ^ / ~ / latest
+    # v1.0.4：新增 make seed/seed-clean（总纲 SOP-W-7 的种子数据归属样板，
+    # 全项目第一个）——scripts/seed.sh 灌 5 个示例客户（覆盖 ACTIVE/
+    # DISABLED 两种状态 + 一条联系人），只走真实 gRPC 调用。纯本地开发
+    # 工具，不进镜像、无行为/契约变更。
                                       # v1.0.2：纯重新构建，deployment.image 之前一直
                                       # 停在 1.0.0，v1.0.1 的源码改动从没真的打进镜像
                                       # 过（阶段三 Task 4 核对 brickkit up 真机时发现）
@@ -61,7 +65,7 @@ configSchema:
 
 deployment:
   type: container
-  image: brickenterprise/mdm-customer:1.0.3
+  image: brickenterprise/mdm-customer:1.0.4
   port: 8080                         # 端口册 registry/ports.tsv
   extraPorts:
     - { name: grpc, port: 9090 }     # → MDM_CUSTOMER_GRPC_ENDPOINT（值仍以 http:// 开头）
