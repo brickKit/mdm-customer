@@ -19,7 +19,9 @@ DECLARE
   k TEXT;
 BEGIN
   FOR k IN SELECT unnest(ARRAY[
-    'seed-customer-1','seed-customer-2','seed-customer-3','seed-customer-4','seed-customer-5'
+    'seed-customer-1','seed-customer-2','seed-customer-3','seed-customer-4','seed-customer-5',
+    'seed-customer-6','seed-customer-7','seed-customer-8','seed-customer-9','seed-customer-10',
+    'seed-customer-11','seed-customer-12'
   ])
   LOOP
     SELECT result_id::BIGINT INTO cid FROM command_idempotency WHERE idempotency_key = k;

@@ -4,7 +4,14 @@ kind: Component
 metadata:
   id: mdm/customer                   # ⚠️ Fork 件必须与标准件完全一致（§3.4.1）
   name: 客户主数据
-  version: 1.0.4                     # 精确版本，不接受 ^ / ~ / latest
+  version: 1.0.5                     # 精确版本，不接受 ^ / ~ / latest
+    # v1.0.5：make seed 从 5 个客户加量到 12 个——seed-customer-1..5 是
+    # 已被 crm-opportunity 反查引用的固定 idempotency_key，只增不改；
+    # 新增 6..12 覆盖更多行业画像（零售/软件/食品/建筑/能源/农业/医疗）+
+    # 信用额度从 0 到百万级的完整区间（含一条刻意压极低的样例，供
+    # erp-sales 的信用超限 Saga 补偿场景以后有真实客户可用）+ 4 条回填
+    # 1-4 个月前的历史创建时间，让"最近 N 天"类查询有真实新旧可看。
+    # seed-clean.sh 同步扩到清 12 个 key。无行为/契约变更。
     # v1.0.4：新增 make seed/seed-clean（总纲 SOP-W-7 的种子数据归属样板，
     # 全项目第一个）——scripts/seed.sh 灌 5 个示例客户（覆盖 ACTIVE/
     # DISABLED 两种状态 + 一条联系人），只走真实 gRPC 调用。纯本地开发
@@ -65,7 +72,7 @@ configSchema:
 
 deployment:
   type: container
-  image: brickenterprise/mdm-customer:1.0.4
+  image: brickenterprise/mdm-customer:1.0.5
   port: 8080                         # 端口册 registry/ports.tsv
   extraPorts:
     - { name: grpc, port: 9090 }     # → MDM_CUSTOMER_GRPC_ENDPOINT（值仍以 http:// 开头）
