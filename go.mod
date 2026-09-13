@@ -4,12 +4,20 @@ go 1.25.0
 
 require (
 	github.com/brickKit/be-sdk-go v0.2.1
+	github.com/brickKit/mdm-customer/gen/mdm/customer v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.10.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 )
+
+// gen/mdm/customer 是本仓库自己嵌套的 go module（不是外部依赖）——理由与 module
+// 边界的取舍同 erp-finance 的 go.mod 那条注释（阶段四调研记录 04 §13）：让外壳
+// 能把 crm-opportunity/erp-sales vendor 的同一份契约镜像 replace 到这里，避免
+// protobuf 全局注册表撞车；module 边界切在 v1 的上一级，因为 Go 模块路径禁止
+// 以字面量 `/v1` 结尾。
+replace github.com/brickKit/mdm-customer/gen/mdm/customer => ./gen/mdm/customer
 
 require (
 	github.com/MicahParks/jwkset v0.11.3 // indirect
