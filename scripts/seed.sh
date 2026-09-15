@@ -33,18 +33,30 @@ need() { command -v "$1" >/dev/null 2>&1 || die "缺少命令：$1"; }
 need docker; need python3
 
 NET="${BRICKKIT_NET:-brickkit-$(basename "$ROOT")-net}"
-docker network inspect "$NET" >/dev/null 2>&1 || die "docker 网络 $NET 不存在——先把本组件 brickkit up 起来（整套或只装这一个）"
-
-CNAME="$(docker ps --filter "name=${NET%-net}-mdm-customer-" --format '{{.Names}}' | head -1)"
-[ -n "$CNAME" ] || die "mdm-customer 容器没在跑——先 brickkit up"
+docker network inspect "$NET" >/dev/null 2>&1 || die "docker 网络 $NET 不存在——先把本组件 brickkit up 起来（整套或只装这一个，servedBy 合并部署也可以）"
 
 GRPC_PORT="$(awk -F'\t' '$2=="mdm/customer"{print $4}' "$ROOT/registry/ports.tsv")"
 [ -n "$GRPC_PORT" ] || die "registry/ports.tsv 里找不到 mdm/customer 的 grpc 端口"
 
+# ⚠️ 真机踩到的坑（阶段四附加 Task 0.5）：这里原来靠 docker ps 按名字
+# 前缀找本组件自己的容器——brickKit 的 servedBy 合并部署下，本组件可能
+# 被收编进某个外壳，没有独立容器，找不到任何匹配，脚本会在这里直接
+# 报错退出。改成按 brickKit 自己给依赖方注入 *_ENDPOINT 时用的同一条
+# 地址转换规则直接拼目标地址（componentId+version 转小写、"/"和"."
+# 全部替换成"-"——brickKit 源码 internal/manifest/servicename.go 的
+# ServiceName()，已向 brickKit 确认这条规则不区分"组件是不是自己独立
+# 一个容器"：独立部署时它就是那个容器自己的 compose service 名，
+# servedBy 合并部署时它是外壳容器网络别名的一个别名，两种部署形态解析
+# 到的都是正确位置，脚本不需要检测、也不需要关心究竟是哪一种）。
+component_version() {
+  awk -v id="$1" '$0 ~ "^  - id: "id"$"{f=1;next} f&&/^    version:/{print $2;exit}' "$ROOT/brickkit.yaml"
+}
+service_name() { echo "$1-$(component_version "$1")" | tr '[:upper:]' '[:lower:]' | tr '/.' '--'; }
+
 # 平台不把 gRPC 端口映射到宿主机（导读第 1/14 条），grpcurl 用容器镜像
 # 加入 brickkit 网络直连，不是打 localhost。
 GRPCURL="docker run --rm --network $NET -v $DIR/contracts:/contracts:ro fullstorydev/grpcurl:latest"
-TARGET="$CNAME:$GRPC_PORT"
+TARGET="$(service_name mdm/customer):$GRPC_PORT"
 
 mkcustomer() {
   local key="$1" name="$2" credit="$3"
