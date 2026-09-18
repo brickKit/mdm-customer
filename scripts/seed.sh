@@ -24,34 +24,14 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "$DIR/../../.." && pwd)"
+source "$ROOT/infra/scripts/lib/seed-net.sh"
 
-C_GRN=$'\033[32m'; C_RED=$'\033[31m'; C_OFF=$'\033[0m'
-ok()  { echo "${C_GRN}✓${C_OFF} $*"; }
-die() { echo "${C_RED}✗${C_OFF} $*" >&2; exit 1; }
-
-need() { command -v "$1" >/dev/null 2>&1 || die "缺少命令：$1"; }
 need docker; need python3
 
-NET="${BRICKKIT_NET:-brickkit-$(basename "$ROOT")-net}"
-docker network inspect "$NET" >/dev/null 2>&1 || die "docker 网络 $NET 不存在——先把本组件 brickkit up 起来（整套或只装这一个，servedBy 合并部署也可以）"
+seed_net_check
 
 GRPC_PORT="$(awk -F'\t' '$2=="mdm/customer"{print $4}' "$ROOT/registry/ports.tsv")"
 [ -n "$GRPC_PORT" ] || die "registry/ports.tsv 里找不到 mdm/customer 的 grpc 端口"
-
-# ⚠️ 真机踩到的坑（阶段四附加 Task 0.5）：这里原来靠 docker ps 按名字
-# 前缀找本组件自己的容器——brickKit 的 servedBy 合并部署下，本组件可能
-# 被收编进某个外壳，没有独立容器，找不到任何匹配，脚本会在这里直接
-# 报错退出。改成按 brickKit 自己给依赖方注入 *_ENDPOINT 时用的同一条
-# 地址转换规则直接拼目标地址（componentId+version 转小写、"/"和"."
-# 全部替换成"-"——brickKit 源码 internal/manifest/servicename.go 的
-# ServiceName()，已向 brickKit 确认这条规则不区分"组件是不是自己独立
-# 一个容器"：独立部署时它就是那个容器自己的 compose service 名，
-# servedBy 合并部署时它是外壳容器网络别名的一个别名，两种部署形态解析
-# 到的都是正确位置，脚本不需要检测、也不需要关心究竟是哪一种）。
-component_version() {
-  awk -v id="$1" '$0 ~ "^  - id: "id"$"{f=1;next} f&&/^    version:/{print $2;exit}' "$ROOT/brickkit.yaml"
-}
-service_name() { echo "$1-$(component_version "$1")" | tr '[:upper:]' '[:lower:]' | tr '/.' '--'; }
 
 # 平台不把 gRPC 端口映射到宿主机（导读第 1/14 条），grpcurl 用容器镜像
 # 加入 brickkit 网络直连，不是打 localhost。
@@ -118,8 +98,7 @@ ok "客户：$C1(ACTIVE+1联系人) $C2(ACTIVE) $C3(ACTIVE) $C4(ACTIVE) $C5(DISA
 # 新旧可看，不是全部客户都"刚刚创建"。customers 表不分区，直接 UPDATE
 # 安全（不像 erp-inventory 的 inventory_movements 那样牵扯分区放置）。
 # 只回填新增的 6-12（1-5 是既有契约数据，创建时间不动它）。
-psqlx() { docker exec -i be-postgres psql -U postgres -d brickkit_db -v ON_ERROR_STOP=1 -q "$@"; }
-psqlx <<SQL
+psqlx -q <<SQL
 SET search_path TO mdm_customer;
 UPDATE customers SET created_at = now() - interval '4 months', updated_at = now() - interval '4 months' WHERE id = '$C6';
 UPDATE customers SET created_at = now() - interval '3 months', updated_at = now() - interval '3 months' WHERE id = '$C7';
